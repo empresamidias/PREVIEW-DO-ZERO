@@ -17,3 +17,10 @@ export interface TerminalLog {
   type: 'info' | 'success' | 'error' | 'command' | 'warning';
   timestamp: string;
 }
+
+export enum Status {
+  IDLE = 'IDLE',
+  LOADING = 'LOADING',
+  SUCCESS = 'SUCCESS',
+  ERROR = 'ERROR',
+}

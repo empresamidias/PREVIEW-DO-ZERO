@@ -13,10 +13,13 @@ import {
   ChevronRight,
   ExternalLink,
   Search,
-  RefreshCw
+  RefreshCw,
+  RefreshCcw,
+  MessageSquare
 } from 'lucide-react';
 import { fetchProjectsList, downloadAndUnzip } from './services/api';
-import type { ProjectData, VirtualFile } from './types';
+import { supabase } from './supabase';
+import { ProjectData, VirtualFile, Status } from './types';
 
 interface ProjectDataWithStatus extends ProjectData {
   readyToRun?: boolean;
@@ -29,8 +32,12 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [readyToRun, setReadyToRun] = useState(false);
-  const [viewMode, setViewMode] = useState<'files' | 'preview'>('files');
+  const [viewMode, setViewMode] = useState<'files' | 'preview' | 'prompt'>('files');
   const [logs, setLogs] = useState<string[]>(["System initialized...", "Ready for project selection."]);
+  
+  // Prompt states
+  const [prompt, setPrompt] = useState('');
+  const [dbStatus, setDbStatus] = useState<Status>(Status.IDLE);
 
   const addLog = (msg: string) => {
     setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-50));
@@ -116,7 +123,7 @@ const App: React.FC = () => {
       
       const unpackedFiles = await downloadAndUnzip(project.id, fileName);
       setFiles(unpackedFiles);
-      loadProjects(); // Refresh status list
+      loadProjects(); 
     } catch (err: any) {
       setError(err.message);
       addLog(`Fatal Error: ${err.message}`);
@@ -146,9 +153,37 @@ const App: React.FC = () => {
     }
   };
 
+  const handlePromptSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!prompt.trim()) return;
+
+    setDbStatus(Status.LOADING);
+    addLog("Iniciando sincronização com Supabase...");
+
+    try {
+      const { error } = await supabase
+        .from('prompts')
+        .insert([{ 
+          content: prompt, 
+          project_id: activeProjectId,
+          created_at: new Date().toISOString()
+        }]);
+
+      if (error) throw error;
+
+      setDbStatus(Status.SUCCESS);
+      addLog("Dados sincronizados com sucesso no Supabase.");
+      setTimeout(() => setDbStatus(Status.IDLE), 3000);
+    } catch (err: any) {
+      console.error(err);
+      setDbStatus(Status.ERROR);
+      addLog(`Erro ao sincronizar: ${err.message}`);
+    }
+  };
+
   return (
     <div className="flex h-screen w-screen bg-[#0f172a] text-slate-300 overflow-hidden font-sans">
-      {/* Sidebar - Projetos */}
+      {/* Sidebar */}
       <aside className="w-72 bg-[#1e293b] border-r border-slate-800 flex flex-col shadow-xl">
         <div className="p-6 border-b border-slate-800 flex items-center gap-3">
           <div className="p-2 bg-indigo-600 rounded-lg">
@@ -192,11 +227,6 @@ const App: React.FC = () => {
               {p.readyToRun && <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />}
             </button>
           ))}
-          {projects.length === 0 && !loading && (
-            <div className="text-center py-10 px-4">
-              <p className="text-slate-500 text-sm italic">No projects found.</p>
-            </div>
-          )}
         </nav>
 
         <div className="p-4 bg-[#1e293b] border-t border-slate-800">
@@ -209,18 +239,15 @@ const App: React.FC = () => {
 
       {/* Main Area */}
       <main className="flex-1 flex flex-col min-w-0 bg-[#0f172a]">
-        {/* Header - Ações */}
         <header className="h-16 bg-[#1e293b] border-b border-slate-800 flex items-center justify-between px-6 shadow-sm">
           <div className="flex items-center gap-4">
             {activeProjectId ? (
-              <>
-                <h2 className="text-white font-semibold flex items-center gap-2">
-                  {activeProjectId}
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase tracking-tighter ${readyToRun ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
-                    {readyToRun ? 'Installed' : 'Pending'}
-                  </span>
-                </h2>
-              </>
+              <h2 className="text-white font-semibold flex items-center gap-2">
+                {activeProjectId}
+                <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase tracking-tighter ${readyToRun ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+                  {readyToRun ? 'Installed' : 'Pending'}
+                </span>
+              </h2>
             ) : (
               <p className="text-slate-500 text-sm">Select a project to begin</p>
             )}
@@ -231,7 +258,7 @@ const App: React.FC = () => {
               <button
                 disabled={loading}
                 onClick={handleDownloadAndInstall}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 text-white rounded-md text-sm font-medium transition-all shadow-lg shadow-indigo-500/10"
+                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 text-white rounded-md text-sm font-medium transition-all shadow-lg"
               >
                 {loading ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
                 Install Dependencies
@@ -250,9 +277,7 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Content Area */}
         <div className="flex-1 flex flex-col min-h-0">
-          {/* Tabs */}
           <div className="flex bg-[#1e293b] px-4 gap-1">
             <button 
               onClick={() => setViewMode('files')}
@@ -265,6 +290,12 @@ const App: React.FC = () => {
               className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold uppercase tracking-wider border-b-2 transition-all ${viewMode === 'preview' ? 'border-indigo-500 text-white bg-indigo-500/5' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
             >
               <Globe size={14} /> Preview
+            </button>
+            <button 
+              onClick={() => setViewMode('prompt')}
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold uppercase tracking-wider border-b-2 transition-all ${viewMode === 'prompt' ? 'border-indigo-500 text-white bg-indigo-500/5' : 'border-transparent text-slate-500 hover:text-slate-300'}`}
+            >
+              <MessageSquare size={14} /> Prompt
             </button>
           </div>
 
@@ -283,7 +314,7 @@ const App: React.FC = () => {
                 ) : (
                   <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-4 opacity-50">
                     <Files size={48} />
-                    <p className="text-center">No files to display. {activeProjectId ? 'Project needs installation.' : 'Select a project.'}</p>
+                    <p className="text-center">No files to display.</p>
                   </div>
                 )}
               </div>
@@ -300,11 +331,52 @@ const App: React.FC = () => {
                     <ExternalLink size={14} />
                   </a>
                 </div>
-                <iframe
-                  src="http://localhost:3001/"
-                  className="flex-1 w-full bg-white border-none"
-                  title="Project Preview"
-                ></iframe>
+                <iframe src="http://localhost:3001/" className="flex-1 w-full bg-white border-none" title="Project Preview"></iframe>
+              </div>
+            )}
+
+            {viewMode === 'prompt' && (
+              <div className="absolute inset-0 p-8 overflow-y-auto custom-scrollbar bg-[#0f172a]">
+                <div className="max-w-4xl mx-auto">
+                  <form onSubmit={handlePromptSubmit} className="relative z-10">
+                    <div className="flex items-center justify-between mb-6">
+                      <label className="text-[10px] font-black text-indigo-500 uppercase tracking-[0.3em]">
+                        Entrada de Mensagem
+                      </label>
+                      <div className="flex items-center gap-2 text-[9px] text-gray-600 font-mono">
+                        <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                        SUPABASE CONNECTED
+                      </div>
+                    </div>
+
+                    <textarea
+                      value={prompt}
+                      onChange={(e) => setPrompt(e.target.value)}
+                      className="w-full bg-black/40 border border-white/10 rounded-2xl p-6 text-white min-h-[400px] focus:ring-1 focus:ring-indigo-500 outline-none font-mono text-sm leading-relaxed transition-all placeholder:text-gray-800"
+                      placeholder="Cole seu prompt ou código aqui para salvar no banco de dados..."
+                    />
+
+                    <button
+                      type="submit"
+                      disabled={dbStatus === Status.LOADING || !prompt.trim()}
+                      className="w-full mt-6 py-5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-gray-700 text-white font-black rounded-2xl flex items-center justify-center gap-3 transition-all shadow-xl shadow-indigo-600/10 active:scale-[0.98] uppercase text-xs tracking-widest"
+                    >
+                      {dbStatus === Status.LOADING ? (
+                        <Loader2 className="animate-spin" size={20} />
+                      ) : (
+                        <>
+                          <RefreshCcw size={18} />
+                          Sincronizar com Supabase
+                        </>
+                      )}
+                    </button>
+
+                    <div className="mt-4 h-6 text-center">
+                      {dbStatus === Status.ERROR && <span className="text-red-500 text-[10px] font-bold uppercase tracking-widest">Erro na transação. Verifique a rede.</span>}
+                      {dbStatus === Status.SUCCESS && <span className="text-green-500 text-[10px] font-bold uppercase tracking-widest">Sincronizado com sucesso!</span>}
+                    </div>
+                  </form>
+                </div>
               </div>
             )}
 
@@ -312,25 +384,14 @@ const App: React.FC = () => {
               <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-[2px] z-50 flex items-center justify-center">
                 <div className="flex flex-col items-center gap-4 bg-[#1e293b] p-8 rounded-2xl shadow-2xl border border-slate-700">
                   <Loader2 className="animate-spin text-indigo-500" size={40} />
-                  <div className="text-center">
-                    <p className="text-white font-medium">Processing Request</p>
-                    <p className="text-slate-400 text-xs mt-1">Downloading files and linking dependencies...</p>
+                  <div className="text-center text-white">
+                    <p className="font-medium">Processando Requisição</p>
                   </div>
                 </div>
               </div>
             )}
           </div>
 
-          {/* Error Banner */}
-          {error && (
-            <div className="bg-rose-500/10 border-t border-rose-500/20 p-4 flex items-center gap-3 text-rose-400 text-sm">
-              <AlertCircle size={18} />
-              <p className="flex-1">{error}</p>
-              <button onClick={() => setError(null)} className="hover:text-white">&times;</button>
-            </div>
-          )}
-
-          {/* Logs Area (Terminal) */}
           <footer className="h-40 bg-[#0a0f1d] border-t border-slate-800 flex flex-col">
              <div className="px-4 py-2 bg-[#1e293b] border-b border-slate-800 flex items-center gap-2">
                 <Terminal size={12} className="text-slate-500" />
@@ -343,7 +404,6 @@ const App: React.FC = () => {
                     <span>{log}</span>
                   </div>
                 ))}
-                <div className="animate-pulse">_</div>
              </div>
           </footer>
         </div>

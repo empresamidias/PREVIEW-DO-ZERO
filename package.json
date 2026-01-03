@@ -13,6 +13,7 @@
     "react-dom": "^19.2.3",
     "lucide-react": "0.460.0",
     "jszip": "^3.10.1",
+    "@supabase/supabase-js": "2.45.4",
     "fs": "^0.0.1-security",
     "path": "^0.12.7",
     "https": "^1.0.0",
